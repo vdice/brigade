@@ -200,14 +200,14 @@ function release(p, tag) {
 
 // Separate docker build stage as there may be multiple consumers/publishers,
 // For example, publishing to Dockerhub and ACR below
-function goDockerBuild(project, tag) {
+function goDockerBuild(e, p) {
   // We build in a separate pod b/c AKS's Docker is too old to do multi-stage builds.
   const builder = new Job(`${projectName}-docker-build`, goImg);
 
   builder.storage.enabled = true;
   builder.env = goEnv;
   builder.tasks = [
-    `cd /src && git checkout ${tag}`,
+    `cd /src`,
     `mkdir -p ${localPath}/bin`,
     `cp -a /src/* ${localPath}`,
     `cp -a /src/.git ${localPath}`,
@@ -371,7 +371,7 @@ events.on("publish", (e, p) => {
     throw error("No tag specified");
   }
 
-  goDockerBuild(p, payload.tag)
+  goDockerBuild(e, p)
     .run()
     .then(() => {
       Group.runAll([
