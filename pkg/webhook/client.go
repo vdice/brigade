@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
-	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -106,27 +106,15 @@ func GetLastCommit(proj *brigade.Project, ref string) (string, error) {
 // GetFileContents returns the contents for a particular file in the project.
 func GetFileContents(proj *brigade.Project, ref, path string) ([]byte, error) {
 	c := context.Background()
-
-	var client *github.Client
-	if proj.Github.Token != "" { // GitHub project configured with Auth Token
-		var err error
-		client, err = ghClient(proj.Github)
-		if err != nil {
-			return []byte{}, err
-		}
-	} else { // OSS project
-		netClient := &http.Client{ // https://medium.com/@nate510/don-t-use-go-s-default-http-client-4804cb19f779
-			Timeout: time.Second * 30, // 30 seconds timeout should be enough
-		}
-		client = github.NewClient(netClient)
+	client, err := ghClient(proj.Github)
+	if err != nil {
+		return []byte{}, err
 	}
-
 	parts := strings.SplitN(proj.Repo.Name, "/", 3)
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("project name %q is malformed", proj.Repo.Name)
 	}
 	opts := &github.RepositoryContentGetOptions{Ref: ref}
-
 	r, err := client.Repositories.DownloadContents(c, parts[1], parts[2], path, opts)
 	if err != nil {
 		return nil, err
@@ -134,4 +122,43 @@ func GetFileContents(proj *brigade.Project, ref, path string) ([]byte, error) {
 	defer r.Close()
 	return ioutil.ReadAll(r)
 
+}
+
+func (s *githubHook) installationToken(appID, installationID int, cfg brigade.Github) (string, time.Time, error) {
+	aidStr := strconv.Itoa(appID)
+	// We need to perform auth here, and then inject the token into the
+	// body so that the app can use it.
+	tok, err := JWT(aidStr, s.key)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+
+	ghc, err := ghClient(brigade.Github{
+		Token:     tok,
+		BaseURL:   cfg.BaseURL,
+		UploadURL: cfg.UploadURL,
+	})
+
+	if err != nil {
+		return "", time.Time{}, err
+	}
+
+	ctx := context.Background()
+	itok, _, err := ghc.Apps.CreateInstallationToken(ctx, int64(installationID))
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return itok.GetToken(), itok.GetExpiresAt(), nil
+}
+
+// InstallationTokenClient uses an installation token to authenticate to the Github API.
+func InstallationTokenClient(instToken, baseURL, uploadURL string) (*github.Client, error) {
+	// For installation tokens, Github uses a different token type ("token" instead of "bearer")
+	t := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: instToken, TokenType: "token"})
+	c := context.Background()
+	tc := oauth2.NewClient(c, t)
+	if baseURL != "" {
+		return github.NewEnterpriseClient(baseURL, uploadURL, tc)
+	}
+	return github.NewClient(tc), nil
 }
