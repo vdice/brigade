@@ -1,0 +1,8 @@
+# This .dockerignore file is used dynamically in image building for the various
+# components in this repo
+*
+!pkg
+!vendor
+!BRIGADE_COMPONENT
+BRIGADE_COMPONENT/Dockerfile
+BRIGADE_COMPONENT/README.md

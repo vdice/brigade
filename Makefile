@@ -133,12 +133,15 @@ build: build-all-images build-brig
 build-all-images: $(addsuffix -build-image,$(IMAGES))
 
 %-build-image:
+	sed -i s/BRIGADE_COMPONENT/$*/g .dockerignore
 	docker build \
 		-f $*/Dockerfile \
 		-t $(DOCKER_IMAGE_PREFIX)$*:$(IMMUTABLE_DOCKER_TAG) \
 		--build-arg LDFLAGS='$(LDFLAGS)' \
-		.
-	docker tag $(DOCKER_IMAGE_PREFIX)$*:$(IMMUTABLE_DOCKER_TAG) $(DOCKER_IMAGE_PREFIX)$*:$(MUTABLE_DOCKER_TAG)
+		. \
+	&& docker tag $(DOCKER_IMAGE_PREFIX)$*:$(IMMUTABLE_DOCKER_TAG) $(DOCKER_IMAGE_PREFIX)$*:$(MUTABLE_DOCKER_TAG) \
+	|| sed -i s/$*/BRIGADE_COMPONENT/g .dockerignore
+	sed -i s/$*/BRIGADE_COMPONENT/g .dockerignore
 
 # Cross-compile binaries for brig
 build-brig:
