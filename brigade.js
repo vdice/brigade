@@ -49,6 +49,20 @@ function jsTest() {
   return job;
 }
 
+function e2e() {
+  // Create a new job to run kind-based e2e tests
+  var job = new Job("test-e2e", "quay.io/vdice/go-dind:v0.1.0");
+  job.privileged = true;
+
+  job.tasks = [
+    "dockerd-entrypoint.sh &",
+    "sleep 20",
+    "cd /src",
+    "make e2e"
+  ];
+  return job;
+}
+
 function buildAndPublishImages(project, version) {
   let dockerRegistry = project.secrets.dockerhubRegistry || "docker.io";
   let dockerOrg = project.secrets.dockerhubOrg || "brigadecore";
@@ -272,6 +286,10 @@ events.on("exec", (e, p) => {
     jsTest()
   ]);
 });
+
+events.on("e2e", () => {
+  return e2e().run();
+})
 
 events.on("push", (e, p) => {
   let matchStr = e.revision.ref.match(releaseTagRegex);

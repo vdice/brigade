@@ -1,6 +1,6 @@
 #!/bin/bash
 # custom script for e2e testing
-# ~/bin must exist and be part of $PATH
+# ${BIN_DIR} must exist and be part of $PATH
 
 # kudos to https://elder.dev/posts/safer-bash/
 set -o errexit # script exits when a command fails == set -e
@@ -20,6 +20,8 @@ HELM_PLATFORM=linux-amd64
 HELM_VERSION=helm-v3.0.0-alpha.1
 HELM_EXECUTABLE=helm3
 
+BIN_DIR="${BIN_DIR:-/usr/local/bin}"
+
 if [ -z "$BRIG_IMAGE" ]
 then
       echo "\$BRIG_IMAGE is empty, it must be set before running this script"
@@ -28,24 +30,25 @@ fi
 
 # check if kubectl is installed
 if ! [ -x "$(command -v kubectl)" ]; then
-  echo 'Error: kubectl is not installed. Installing...'
-  curl -LO https://storage.googleapis.com/kubernetes-release/release/$KUBECTL_VERSION/bin/$KUBECTL_PLATFORM/kubectl && chmod +x ./kubectl && mv kubectl ~/bin/$KUBECTL_EXECUTABLE
+  echo 'kubectl is not installed. Installing...'
+  curl -LO https://storage.googleapis.com/kubernetes-release/release/$KUBECTL_VERSION/bin/$KUBECTL_PLATFORM/kubectl && chmod +x ./kubectl && mv kubectl ${BIN_DIR}/$KUBECTL_EXECUTABLE
 fi
 
 # check if kind is installed
 if ! [ -x "$(command -v $KIND_EXECUTABLE)" ]; then
-    echo 'Error: kind is not installed. Installing...'
-    wget https://github.com/kubernetes-sigs/kind/releases/download/$KIND_VERSION/$KIND_PLATFORM && mv $KIND_PLATFORM ~/bin/$KIND_EXECUTABLE && chmod +x ~/bin/$KIND_EXECUTABLE
+    echo 'kind is not installed. Installing...'
+    wget https://github.com/kubernetes-sigs/kind/releases/download/$KIND_VERSION/$KIND_PLATFORM && mv ./$KIND_PLATFORM ${BIN_DIR}/$KIND_EXECUTABLE && chmod +x ${BIN_DIR}/$KIND_EXECUTABLE
 fi
 
 # check if helm is installed
 if ! [ -x "$(command -v $HELM_EXECUTABLE)" ]; then
-    echo 'Error: Helm is not installed. Installing...'
-    wget https://get.helm.sh/$HELM_VERSION-$HELM_PLATFORM.tar.gz && tar -xvzf $HELM_VERSION-$HELM_PLATFORM.tar.gz && rm -rf $HELM_VERSION-$HELM_PLATFORM.tar.gz && mv $HELM_PLATFORM/helm ~/bin/$HELM_EXECUTABLE && chmod +x ~/bin/$HELM_EXECUTABLE
+    echo 'Helm is not installed. Installing...'
+    wget https://get.helm.sh/$HELM_VERSION-$HELM_PLATFORM.tar.gz && tar -xvzf $HELM_VERSION-$HELM_PLATFORM.tar.gz && rm -rf $HELM_VERSION-$HELM_PLATFORM.tar.gz && mv ./$HELM_PLATFORM/helm ${BIN_DIR}/$HELM_EXECUTABLE && chmod +x ${BIN_DIR}/$HELM_EXECUTABLE
 fi
 
 # create kind k8s cluster
-$KIND_EXECUTABLE create cluster
+# NOTE(vadice): cluster creation seemed to fail intermittently... should add a wait?
+$KIND_EXECUTABLE create cluster --wait 60s
 
 function finish {
   echo "-----Cleaning up-----"
