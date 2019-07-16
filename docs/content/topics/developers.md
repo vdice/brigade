@@ -275,8 +275,8 @@ kubectl --namespace kube-system create serviceaccount tiller
 kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller 
 kubectl --namespace kube-system patch deploy tiller-deploy -p '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}' 
 ```
-- Run `DOCKER_REGISTRY=brigadecore make build-all-images load-all-images` to build all images locally for the kind cluster
-- Run `make helm-install` to install/upgrade Brigade onto the kind cluster. This is the command you should re-run to test your changes during your Brigade development workflow
+- Run `DOCKER_ORG=brigadecore make build-all-images load-all-images` to build all images locally for the kind cluster
+- Run `make helm-install` to install/upgrade Brigade onto the kind cluster. This is the command you should re-run to test your changes during your Brigade development workflow. If this command does not work, you probably need to run `helm repo add brigade https://brigadecore.github.io/charts`
 
 When you're done, feel free to `kind delete cluster` to tear down the kind cluster resources.
 

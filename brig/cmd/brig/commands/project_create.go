@@ -77,7 +77,7 @@ func newProjectVCS() *brigade.Project {
 func init() {
 	project.AddCommand(projectCreate)
 	flags := projectCreate.Flags()
-	flags.StringVarP(&projectCreateConfig, "config", "f", "", "Path to JSON Kubernetes Secret.")
+	flags.StringVarP(&projectCreateConfig, "config", "f", "", "Path to JSON or YAML Kubernetes Secret.")
 	flags.StringVarP(&projectCreateFromProject, "from-project", "p", "", "Retrieve the given project from Kubernetes and use it to set the default values.")
 	flags.StringVarP(&projectCreateOut, "out", "o", "", "File where configuration should be saved. The configuration is stored as a JSON Kubernetes Secret")
 	flags.BoolVarP(&projectCreateDryRun, "dry-run", "D", false, "Do not send the config to Kubernetes")
@@ -111,6 +111,7 @@ func createProject(out io.Writer) error {
 		if proj, err = loadProjectConfig(projectCreateConfig, proj); err != nil {
 			return err
 		}
+		return store.CreateProject(proj)
 	}
 
 	if projectCreateFromProject != "" {
