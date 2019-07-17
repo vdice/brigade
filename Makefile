@@ -244,4 +244,4 @@ test-functional:
 
 .PHONY: e2e
 e2e:
-	BRIG_IMAGE=$(BRIGADE_REGISTRY)/brig:$(IMMUTABLE_DOCKER_TAG) ./e2e/run.sh
+	./e2e/run.sh

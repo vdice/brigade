@@ -8,6 +8,9 @@ set -o nounset # script exits when tries to use undeclared variables == set -u
 #set -o xtrace # trace what's executed == set -x (useful for debugging)
 set -o pipefail # causes pipelines to retain / set the last non-zero status
 
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
+BIN_DIR="${BIN_DIR:-"$(mktemp -d)"}"
+
 KUBECTL_PLATFORM=linux/amd64
 KUBECTL_VERSION=v1.15.0
 KUBECTL_EXECUTABLE=kubectl
@@ -20,35 +23,88 @@ HELM_PLATFORM=linux-amd64
 HELM_VERSION=helm-v3.0.0-alpha.1
 HELM_EXECUTABLE=helm3
 
-BIN_DIR="${BIN_DIR:-/usr/local/bin}"
+########################################################################################################################################################
 
-if [ -z "$BRIG_IMAGE" ]
-then
-      echo "\$BRIG_IMAGE is empty, it must be set before running this script"
-      exit 1
-fi
+function prerequisites_check(){
+    # check if kubectl is installed
+    if ! [ -x "$(command -v kubectl)" ]; then
+      echo 'Error: kubectl is not installed. Installing...'
+      curl -LO https://storage.googleapis.com/kubernetes-release/release/$KUBECTL_VERSION/bin/$KUBECTL_PLATFORM/kubectl && chmod +x ./kubectl && mv kubectl ${BIN_DIR}/$KUBECTL_EXECUTABLE
+    fi
 
-# check if kubectl is installed
-if ! [ -x "$(command -v kubectl)" ]; then
-  echo 'kubectl is not installed. Installing...'
-  curl -LO https://storage.googleapis.com/kubernetes-release/release/$KUBECTL_VERSION/bin/$KUBECTL_PLATFORM/kubectl && chmod +x ./kubectl && mv kubectl ${BIN_DIR}/$KUBECTL_EXECUTABLE
-fi
+    # check if kind is installed
+    if ! [ -x "$(command -v $KIND_EXECUTABLE)" ]; then
+        echo 'Error: kind is not installed. Installing...'
+        wget https://github.com/kubernetes-sigs/kind/releases/download/$KIND_VERSION/$KIND_PLATFORM && mv $KIND_PLATFORM ${BIN_DIR}/$KIND_EXECUTABLE && chmod +x ${BIN_DIR}/$KIND_EXECUTABLE
+    fi
 
-# check if kind is installed
-if ! [ -x "$(command -v $KIND_EXECUTABLE)" ]; then
-    echo 'kind is not installed. Installing...'
-    wget https://github.com/kubernetes-sigs/kind/releases/download/$KIND_VERSION/$KIND_PLATFORM && mv ./$KIND_PLATFORM ${BIN_DIR}/$KIND_EXECUTABLE && chmod +x ${BIN_DIR}/$KIND_EXECUTABLE
-fi
+    # check if helm is installed
+    if ! [ -x "$(command -v $HELM_EXECUTABLE)" ]; then
+        echo 'Error: Helm is not installed. Installing...'
+        wget https://get.helm.sh/$HELM_VERSION-$HELM_PLATFORM.tar.gz && tar -xvzf $HELM_VERSION-$HELM_PLATFORM.tar.gz && rm -rf $HELM_VERSION-$HELM_PLATFORM.tar.gz && mv $HELM_PLATFORM/helm ${BIN_DIR}/$HELM_EXECUTABLE && chmod +x ${BIN_DIR}/$HELM_EXECUTABLE
+    fi
 
-# check if helm is installed
-if ! [ -x "$(command -v $HELM_EXECUTABLE)" ]; then
-    echo 'Helm is not installed. Installing...'
-    wget https://get.helm.sh/$HELM_VERSION-$HELM_PLATFORM.tar.gz && tar -xvzf $HELM_VERSION-$HELM_PLATFORM.tar.gz && rm -rf $HELM_VERSION-$HELM_PLATFORM.tar.gz && mv ./$HELM_PLATFORM/helm ${BIN_DIR}/$HELM_EXECUTABLE && chmod +x ${BIN_DIR}/$HELM_EXECUTABLE
-fi
+    export PATH="${BIN_DIR}:${PATH}"
+}
+
+
+function install_helm_project(){
+    # init helm
+    $HELM_EXECUTABLE init
+
+    # add brigade chart repo
+    $HELM_EXECUTABLE repo add brigade https://brigadecore.github.io/charts
+
+    # install the images onto kind cluster
+    HELM=$HELM_EXECUTABLE make helm-install
+}
+
+function wait_for_deployments() {
+    echo "-----Waiting for Brigade components' deployments-----"
+    # https://stackoverflow.com/questions/59895/getting-the-source-directory-of-a-bash-script-from-within
+    "${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-api
+    "${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-cr-gw
+    "${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-ctrl
+    "${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-generic-gateway
+    "${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-github-app
+    "${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-github-oauth
+    "${DIR}"/wait-for-deployment.sh -n default brigade-server-kashti
+}
+
+function create_verify_test_project(){
+    echo "-----Creating a test project-----"
+    go run "${DIR}"/../brig/cmd/brig/main.go project create -f "${DIR}"/testproject.yaml -x
+
+    echo "-----Checking if the test project secret was created-----"
+    PROJECT_NAME=$($KUBECTL_EXECUTABLE get secret -l app=brigade,component=project,heritage=brigade -o=jsonpath='{.items[0].metadata.name}')
+    if [ $PROJECT_NAME != "$TEST_PROJECT_NAME" ]; then
+        echo "Wrong secret name. Expected $TEST_PROJECT_NAME, got $PROJECT_NAME"
+        exit 1
+    fi
+}
+
+function run_verify_build(){
+    echo "-----Running a Build on the test project-----"
+    go run "${DIR}"/../brig/cmd/brig/main.go run e2eproject -f "${DIR}"/test.js
+
+    # get the worker pod name
+    WORKER_POD_NAME=$($KUBECTL_EXECUTABLE get pod -l component=build,heritage=brigade,project=$TEST_PROJECT_NAME -o=jsonpath='{.items[0].metadata.name}')
+
+    # get the number of lines the expected log output appears
+    LOG_LINES=$($KUBECTL_EXECUTABLE logs $WORKER_POD_NAME | grep "==> handling an 'exec' event" | wc -l)
+
+    if [ $LOG_LINES != 1 ]; then
+        echo "Did not find expected output on worker Pod logs"
+        exit 1
+    fi
+}
+
+########################################################################################################################################################
+
+prerequisites_check
 
 # create kind k8s cluster
-# NOTE(vadice): cluster creation seemed to fail intermittently... should add a wait?
-$KIND_EXECUTABLE create cluster --wait 60s
+$KIND_EXECUTABLE create cluster --loglevel=debug --wait 3m
 
 function finish {
   echo "-----Cleaning up-----"
@@ -60,35 +116,20 @@ trap finish EXIT
 # set KUBECONFIG with details from kind
 export KUBECONFIG="$($KIND_EXECUTABLE get kubeconfig-path --name="kind")"
 
+# DEBUG
+docker ps
+kubectl cluster-info
+kubectl get no
+
 # build all images and load them onto kind
 DOCKER_ORG=brigadecore make build-all-images load-all-images
 
-# init helm
-$HELM_EXECUTABLE init
 
-# add brigade chart repo
-$HELM_EXECUTABLE repo add brigade https://brigadecore.github.io/charts
+install_helm_project # installs helm and Brigade onto kind
 
-# install the images onto kind cluster
-HELM=$HELM_EXECUTABLE make helm-install
+TEST_PROJECT_NAME=brigade-5b55ed522537b663e178f751959d234fd650d626f33f70557b2e82
 
-echo "-----Waiting for Brigade API server and Controller deployments-----"
-# https://stackoverflow.com/questions/59895/getting-the-source-directory-of-a-bash-script-from-within
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
-"${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-api
-"${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-cr-gw
-"${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-ctrl
-"${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-generic-gateway
-"${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-github-app
-"${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-github-oauth
-"${DIR}"/wait-for-deployment.sh -n default brigade-server-kashti
+wait_for_deployments # waits for Brigade deployments
+create_verify_test_project # create a test project
+run_verify_build # run a custom build and make sure it's completed
 
-echo "-----Creating  a test project-----"
-go run "${DIR}"/../brig/cmd/brig/main.go project create -f "${DIR}"/testproject.yaml
-
-echo "-----Checking if the test project secret was created-----"
-PROJECT_NAME=$($KUBECTL_EXECUTABLE get secret -l app=brigade,component=project,heritage=brigade | tail -n 1 | cut -f 1 -d ' ')
-if [ $PROJECT_NAME != "brigade-5b55ed522537b663e178f751959d234fd650d626f33f70557b2e82" ]; then
-    echo "Wrong secret name. Expected brigade-5b55ed522537b663e178f751959d234fd650d626f33f70557b2e82, got $PROJECT_NAME"
-    exit 1
-fi
