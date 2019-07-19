@@ -50,6 +50,22 @@ function jsTest() {
   return job;
 }
 
+function e2e() {
+  // Create a new job to run kind-based e2e tests
+  // Spec'd image wraps docker:stable-dind
+  // with make, bash,, git, kubectl, etc.
+  var job = new Job("test-e2e", "quay.io/vdice/go-dind:v0.1.0");
+  job.privileged = true;
+
+  job.tasks = [
+    "dockerd-entrypoint.sh &",
+    "sleep 20",
+    "cd /src",
+    "make e2e"
+  ];
+  return job;
+}
+
 function buildAndPublishImages(project, version) {
   let dockerRegistry = project.secrets.dockerhubRegistry || "docker.io";
   let dockerOrg = project.secrets.dockerhubOrg || "brigadecore";
@@ -86,6 +102,7 @@ function runSuite(e, p) {
     return Promise.all([
       runTests(e, p, goTest).catch((err) => { return err }),
       runTests(e, p, jsTest).catch((err) => { return err }),
+      runTests(e, p, e2e).catch((err) => { return err }),
     ])
       .then((values) => {
         values.forEach((value) => {
@@ -112,6 +129,8 @@ function runCheck(e, p) {
       return runTests(e, p, goTest);
     case "test-javascript":
       return runTests(e, p, jsTest);
+    case "test-e2e":
+      return runTests(e, p, e2e);
     default:
       throw new Error(`No check found with name: ${name}`);
   }
@@ -173,6 +192,12 @@ function slackNotify(title, msg, project) {
   console.log(`Slack Notification for '${title}' not sent; no SLACK_WEBHOOK secret found.`);
   return noopJob;
 }
+
+// For now, adding a separate handler for running e2e until
+// proven stable enough to add to our normal list of checks on PRs, etc.
+events.on("e2e", () => {
+  return e2e().run();
+})
 
 events.on("exec", (e, p) => {
   return Group.runAll([
