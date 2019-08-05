@@ -3,7 +3,8 @@
 // Be careful when editing!
 // ============================================================================
 const { events, Job, Group } = require("brigadier");
-const { Check } = require("@brigadecore/brigade-utils");
+// TODO: update to official @brigadcorre/brigade once released with KindJob
+const { Check, KindJob } = require("brigade-utils-test");
 
 const projectName = "brigade";
 const projectOrg = "brigadecore";
@@ -54,16 +55,14 @@ function e2e() {
   // Create a new job to run kind-based e2e tests
   // Spec'd image wraps docker:stable-dind
   // with make, bash,, git, kubectl, etc.
-  var job = new Job("test-e2e", "quay.io/vdice/go-dind:v0.1.0");
-  job.privileged = true;
-
-  job.tasks = [
-    "dockerd-entrypoint.sh &",
-    "sleep 20",
+  let kind = new KindJob("test-e2e");
+  kind.tasks.push(
+    "apk add --update --no-cache bash",
     "cd /src",
     "make e2e"
-  ];
-  return job;
+  );
+
+  return kind;
 }
 
 function buildAndPublishImages(project, version) {
