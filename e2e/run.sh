@@ -11,6 +11,11 @@ set -o pipefail # causes pipelines to retain / set the last non-zero status
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 BIN_DIR="${BIN_DIR:-"$(mktemp -d)"}"
 
+# This script may be run in the form of a Brigade KindJob,
+# wherein the kind cluster will have already been pre-provisioned,
+# hence the need to be able to opt-out
+CREATE_KIND="${CREATE_KIND:-true}"
+
 KUBECTL_PLATFORM=linux/amd64
 KUBECTL_VERSION=v1.15.0
 KUBECTL_EXECUTABLE=kubectl
@@ -104,7 +109,9 @@ function run_verify_build(){
 prerequisites_check
 
 # create kind k8s cluster
-$KIND_EXECUTABLE create cluster
+if [[ "${CREATE_KIND}" == "true" ]]; then
+  $KIND_EXECUTABLE create cluster
+fi
 
 function finish {
   echo "-----Cleaning up-----"

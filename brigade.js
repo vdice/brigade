@@ -59,7 +59,7 @@ function e2e() {
   kind.tasks.push(
     "apk add --update --no-cache bash",
     "cd /src",
-    "make e2e"
+    "CREATE_KIND=false make e2e"
   );
 
   return kind;
