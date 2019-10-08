@@ -3,8 +3,7 @@
 // Be careful when editing!
 // ============================================================================
 const { events, Job, Group } = require("brigadier");
-// TODO: update to official @brigadcorre/brigade once released with KindJob
-const { Check, KindJob } = require("brigade-utils-test");
+const { Check, KindJob } = require("@brigadecore/brigade-utils");
 
 const projectName = "brigade";
 const projectOrg = "brigadecore";
@@ -192,8 +191,10 @@ function slackNotify(title, msg, project) {
   return noopJob;
 }
 
-// For now, adding a separate handler for running e2e until
-// proven stable enough to add to our normal list of checks on PRs, etc.
+////////////////////////////////////////////////////////////////////////////////////////////
+// Event Handlers
+////////////////////////////////////////////////////////////////////////////////////////////
+
 events.on("e2e", () => {
   return e2e().run();
 })
