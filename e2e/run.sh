@@ -115,7 +115,7 @@ fi
 
 function finish {
   echo "-----Cleaning up-----"
-  $KIND_EXECUTABLE delete cluster
+  $KIND_EXECUTABLE delete cluster || true
 }
 
 trap finish EXIT

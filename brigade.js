@@ -54,7 +54,7 @@ function e2e() {
   // Create a new job to run kind-based e2e tests
   // Spec'd image wraps docker:stable-dind
   // with make, bash,, git, kubectl, etc.
-  let kind = new KindJob("test-e2e");
+  var kind = new KindJob("test-e2e");
   kind.tasks.push(
     "apk add --update --no-cache bash",
     "cd /src",
