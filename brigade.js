@@ -54,12 +54,16 @@ function e2e() {
   // Create a new job to run kind-based e2e tests
   // Spec'd image wraps docker:stable-dind
   // with make, bash,, git, kubectl, etc.
-  var kind = new KindJob("test-e2e");
+  let kind = new KindJob("test-e2e");
+  // Add golang path setup as e2e script invokes the brig cli
+  // by its main.go file
+  kind.mountPath = localPath;
   kind.tasks.push(
     "apk add --update --no-cache bash",
-    "cd /src",
+    `cd ${localPath}`,
     "CREATE_KIND=false make e2e"
   );
+  kind.timeout = 1800000 // https://github.com/brigadecore/brigade-utils/pull/30 needs to be released
 
   return kind;
 }

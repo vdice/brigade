@@ -72,7 +72,6 @@ function wait_for_deployments() {
     "${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-ctrl
     "${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-generic-gateway
     "${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-github-app
-    "${DIR}"/wait-for-deployment.sh -n default brigade-server-brigade-github-oauth
     "${DIR}"/wait-for-deployment.sh -n default brigade-server-kashti
 }
 
@@ -114,8 +113,10 @@ if [[ "${CREATE_KIND}" == "true" ]]; then
 fi
 
 function finish {
-  echo "-----Cleaning up-----"
-  $KIND_EXECUTABLE delete cluster || true
+  if [[ "${CREATE_KIND}" == "true" ]]; then
+    echo "-----Cleaning up-----"
+    $KIND_EXECUTABLE delete cluster
+  fi
 }
 
 trap finish EXIT
