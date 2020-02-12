@@ -160,20 +160,18 @@ function githubRelease(p, tag) {
     "GITHUB_TOKEN": p.secrets.ghToken,
   };
   job.tasks = [
-    "go get github.com/aktau/github-release",
+    "go get -u github.com/tcnksm/ghr",
     `cd ${localPath}`,
     `VERSION=${tag} make build-brig`,
     `last_tag=$(git describe --tags ${tag}^ --abbrev=0 --always)`,
-    `github-release release \
-      -t ${tag} \
+    `ghr \
+      -u \${GITHUB_USER} \
+      -r \${GITHUB_REPO} \
       -n "${parts[1]} ${tag}" \
-      -d "$(git log --no-merges --pretty=format:'- %s %H (%aN)' HEAD ^$last_tag)" 2>&1 | sed -e "s/\${GITHUB_TOKEN}/<REDACTED>/"`,
-    `for bin in ./bin/*; do \
-      github-release upload -f $bin -n $(basename $bin) -t ${tag} 2>&1 | sed -e "s/\${GITHUB_TOKEN}/<REDACTED>/"; \
-    done`
+      -b "$(git log --no-merges --pretty=format:'- %s %H (%aN)' HEAD ^$last_tag)" \
+      ${tag} bin`,
+    `echo "Release is at https://github.com/${p.repo.name}/releases/tag/${tag}"`
   ];
-  console.log(job.tasks);
-  console.log(`releases at https://github.com/${p.repo.name}/releases/tag/${tag}`);
   return job;
 }
 
