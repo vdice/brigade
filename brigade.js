@@ -144,37 +144,64 @@ function runTests(e, p, jobFunc) {
   return check.run();
 }
 
-function githubRelease(p, tag) {
-  if (!p.secrets.ghToken) {
-    throw new Error("Project must have 'secrets.ghToken' set");
-  }
-  // Cross-compile binaries for a given release and upload them to GitHub.
-  var job = new Job("release", goImg);
+let releaseStorage = {
+  enabled: true,
+  path: "/release-assets",
+};
+
+function buildBrig(tag) {
+  var job = new Job("build-brig", goImg);
+  job.storage = releaseStorage;
   job.shell = "/bin/bash";
   job.mountPath = localPath;
-  parts = p.repo.name.split("/", 2);
-  // Set a few environment variables.
-  job.env = {
-    "SKIP_DOCKER": "true",
-    "GITHUB_USER": parts[0],
-    "GITHUB_REPO": parts[1],
-    "GITHUB_TOKEN": p.secrets.ghToken,
-  };
   job.tasks = [
-    "go get -u github.com/tcnksm/ghr",
     `cd ${localPath}`,
-    `VERSION=${tag} make build-brig`,
-    `last_tag=$(git describe --tags ${tag}^ --abbrev=0 --always)`,
-    `ghr \
-      -u \${GITHUB_USER} \
-      -r \${GITHUB_REPO} \
-      -n "${parts[1]} ${tag}" \
-      -b "$(git log --no-merges --pretty=format:'- %s %H (%aN)' HEAD ^$last_tag)" \
-      ${tag} bin`,
-    `echo "Release is at https://github.com/${p.repo.name}/releases/tag/${tag}"`
+    `SKIP_DOCKER=true VERSION=${tag} make build-brig`,
+    `cp -r bin/* ${releaseStorage.path}`
   ];
   return job;
 }
+
+function githubRelease(p, tag) {
+  var job = new GitHubRelease(p, tag, releaseStorage.path);
+  job.storage = releaseStorage;
+  return job;
+}
+
+class GitHubRelease extends Job {
+  /**
+  * Creates a GitHub release using the provided arguments.
+  *
+  * @param project - the Brigade project
+  * @param tag - release tag
+  * @param binDir - optional path to the directory holding release assets (default is empty)
+  * @param workDir - optional path to the working directory (default is "/src")
+  */
+  constructor(project, tag, binDir = "", workDir = "/src") {
+      if (!project.secrets.ghToken) {
+          throw new Error("Project must have 'secrets.ghToken' set");
+      }
+      if (project.repo === undefined) {
+          throw new Error("Project repository missing or undefined");
+      }
+      let parts = project.repo.name.split("/", 2);
+      let org = parts[0];
+      let repo = parts[1];
+      super(`${org}-${repo}-release`, "quay.io/vdice/gh-release:edge");
+      this.env = {
+          "GITHUB_TOKEN": project.secrets.ghToken,
+      };
+      this.tasks.push(`cd ${workDir}`, `last_tag=$(git describe --tags ${tag}^ --abbrev=0 --always)`, `ghr \
+      -u ${org} \
+      -r ${repo} \
+      -n "${repo} ${tag}" \
+      -b "$(git log --no-merges --pretty=format:'- %s %H (%aN)' HEAD ^$last_tag)" \
+      ${tag} ${binDir}
+    `);
+  }
+}
+exports.GitHubRelease = GitHubRelease;
+
 
 function slackNotify(title, msg, project) {
   if (project.secrets.SLACK_WEBHOOK) {
@@ -215,28 +242,16 @@ events.on("push", (e, p) => {
     // This is an official release with a semantically versioned tag
     let matchTokens = Array.from(matchStr);
     let version = matchTokens[1];
-    return Group.runAll([
-      goTest(),
-      jsTest(),
-      e2e()
-    ])
-      .then(() => {
-        Group.runEach([
-          buildAndPublishImages(p, version),
-          githubRelease(p, version),
-          slackNotify(
-            "Brigade Release",
-            `${version} release now on GitHub! <https://github.com/${p.repo.name}/releases/tag/${version}>`,
-            p
-          )
-        ])
-      });
+    return Group.runEach([
+      buildBrig(version),
+      githubRelease(p, version)
+    ]);
   } else {
     if (e.revision.ref.startsWith('refs/tags')) {
       console.log(`Ref ${e.revision.ref} does not match expected official release tag regex (${releaseTagRegex}); not releasing.`);
     }
   }
-})
+});
 
 events.on("check_suite:requested", runSuite);
 events.on("check_suite:rerequested", runSuite);
