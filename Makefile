@@ -137,7 +137,7 @@ test-unit-js:
 build: build-images build-cli
 
 .PHONY: build-images
-build-images: build-apiserver build-scheduler build-observer build-logger-linux
+build-images: build-apiserver build-scheduler build-observer build-logger-linux build-vcs-sidecar
 
 .PHONY: build-logger-linux
 build-logger-linux:
@@ -154,7 +154,7 @@ build-%:
 		--no-push
 
 .PHONY: push-images
-push-images: push-apiserver push-scheduler push-observer push-logger-linux
+push-images: push-apiserver push-scheduler push-observer push-logger-linux push-vcs-sidecar
 
 .PHONY: push-logger-linux
 push-logger-linux:
@@ -221,7 +221,7 @@ hack-build-cli:
 	'
 
 .PHONY: hack-push-images
-hack-push-images: hack-push-apiserver hack-push-scheduler hack-push-observer hack-push-logger-linux
+hack-push-images: hack-push-apiserver hack-push-scheduler hack-push-observer hack-push-logger-linux hack-push-vcs-sidecar
 
 .PHONY: hack-push-%
 hack-push-%: hack-build-%
