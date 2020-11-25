@@ -372,7 +372,8 @@ func (s *substrate) ScheduleWorker(
 		APIToken             string            `json:"apiToken"`
 		LogLevel             core.LogLevel     `json:"logLevel"`
 		ConfigFilesDirectory string            `json:"configFilesDirectory"`
-		DefaultConfigFiles   map[string]string `json:"defaultConfigFiles" bson:"defaultConfigFiles"` // nolint: lll
+		DefaultConfigFiles   map[string]string `json:"defaultConfigFiles"`
+		Git                  *core.GitConfig   `json:"git"`
 	}
 
 	// Create a secret with event details
@@ -404,6 +405,7 @@ func (s *substrate) ScheduleWorker(
 				LogLevel:             event.Worker.Spec.LogLevel,
 				ConfigFilesDirectory: event.Worker.Spec.ConfigFilesDirectory,
 				DefaultConfigFiles:   event.Worker.Spec.DefaultConfigFiles,
+				Git:                  event.Worker.Spec.Git,
 			},
 		},
 		"",
