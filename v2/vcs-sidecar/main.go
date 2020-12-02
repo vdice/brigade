@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"strings"
 
@@ -25,6 +27,14 @@ type worker struct {
 
 // TODO: needs retry (see v1)
 
+// TODO: need env vars that v1 uses?
+// // BRIGADE_WORKSPACE
+// // askpass.sh
+// // gitssh.sh
+
+// TODO: private repos/ssh clone url
+// // https://github.com/go-git/go-git/blob/master/_examples/clone/auth/ssh/main.go
+
 func main() {
 	log.Printf(
 		"Starting Brigade VCS Sidecar -- version %s -- commit %s",
@@ -32,42 +42,36 @@ func main() {
 		version.Commit(),
 	)
 
-	// TODO: Read and unmarshal event payload
-	// payloadFile := "event.json"
-	// bytes, err := ioutil.ReadFile(payloadFile)
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-
-	// var event event
-	// err = json.Unmarshal(bytes, &event)
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-
-	// Extract git config
-	// gitConfig := event.Worker.Git
-	// temporary for testing:
-	gitConfig := core.GitConfig{
-		Ref:            "master",
-		CloneURL:       "https://github.com/sgoings/makeup.git",
-		InitSubmodules: true,
+	payloadFile := "/event.json"
+	bytes, err := ioutil.ReadFile(payloadFile)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	// Direct port of v1 logic:
+	var event event
+	err = json.Unmarshal(bytes, &event)
+	if err != nil {
+		log.Fatalf("error unmarshaling the event: %s", err)
+	}
+
+	// Extract git config
+	gitConfig := event.Worker.Git
+	if gitConfig == nil {
+		log.Fatal("git config from event.json is nil")
+	}
+
+	// Direct port of v1 logic follows below:
 
 	commitRef := gitConfig.Ref
 	if commitRef == "" {
 		commitRef = gitConfig.Commit
 	}
 
-	fmt.Printf("commitRef = %s\n", commitRef)
-
 	// Create refspec
 	refSpec := config.RefSpec(fmt.Sprintf("+%s:%s",
 		strings.TrimSpace(commitRef), strings.TrimSpace(commitRef)))
 
-	err := refSpec.Validate()
+	err = refSpec.Validate()
 	if err != nil {
 		log.Fatalf("error validating refSpec %q from commitRef %q: %s", refSpec, commitRef, err)
 	}
@@ -82,12 +86,13 @@ func main() {
 	// Create the remote with repository URL
 	rem := git.NewRemote(gitStorage, remoteConfig)
 
+	// From v1: git ls-remote --exit-code "${BRIGADE_REMOTE_URL}" "${BRIGADE_COMMIT_REF}" | cut -f2
 	refs, err := rem.List(&git.ListOptions{})
 	if err != nil {
 		log.Fatalf("error listing remotes: %s", err)
 	}
 
-	// Filters the references list and only keep the full ref
+	// Filter the references list and only keep the full ref
 	// matching our commitRef
 	for _, ref := range refs {
 		// There appears to be a HEAD ref that may exist with formatting
@@ -99,11 +104,11 @@ func main() {
 
 		if strings.Contains(ref.Strings()[0], commitRef) ||
 			strings.Contains(ref.Strings()[1], commitRef) {
-			// From v1: git ls-remote --exit-code "${BRIGADE_REMOTE_URL}" "${BRIGADE_COMMIT_REF}" | cut -f2
 			commitRef = ref.Strings()[1]
 		}
 	}
 
+	// Create refspec
 	refSpec = config.RefSpec(fmt.Sprintf("+%s:%s",
 		strings.TrimSpace(commitRef), strings.TrimSpace(commitRef)))
 
@@ -112,7 +117,7 @@ func main() {
 		log.Fatalf("error validating refSpec %q from commitRef %q: %s", refSpec, commitRef, err)
 	}
 
-	// TODO: v1 had env var for BRIGADE_WORKSPACE
+	// TODO: v1 has env var for BRIGADE_WORKSPACE
 	workspace := "/src"
 	repo, err := git.Init(gitStorage, osfs.New(workspace))
 	if err != nil {
@@ -148,8 +153,8 @@ func main() {
 		log.Fatalf("error checking out worktree: %s", err)
 	}
 
+	// Init submodules if config'd to do so
 	if gitConfig.InitSubmodules {
-		// git submodule update --init --recursive
 		submodules, err := worktree.Submodules()
 		if err != nil {
 			log.Fatalf("error retrieving submodules: %s", err)
