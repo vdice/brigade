@@ -1,17 +1,24 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"os"
+	"os/exec"
 	"strings"
 
 	osfs "github.com/go-git/go-billy/v5/osfs"
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/go-git/go-git/v5/storage/memory"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/brigadecore/brigade/sdk/v2/core"
 	"github.com/brigadecore/brigade/v2/vcs-sidecar/version"
@@ -32,9 +39,6 @@ type worker struct {
 // // askpass.sh
 // // gitssh.sh
 
-// TODO: private repos/ssh clone url
-// // https://github.com/go-git/go-git/blob/master/_examples/clone/auth/ssh/main.go
-
 func main() {
 	log.Printf(
 		"Starting Brigade VCS Sidecar -- version %s -- commit %s",
@@ -43,13 +47,13 @@ func main() {
 	)
 
 	payloadFile := "/event.json"
-	bytes, err := ioutil.ReadFile(payloadFile)
+	data, err := ioutil.ReadFile(payloadFile)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	var event event
-	err = json.Unmarshal(bytes, &event)
+	err = json.Unmarshal(data, &event)
 	if err != nil {
 		log.Fatalf("error unmarshaling the event: %s", err)
 	}
@@ -60,8 +64,35 @@ func main() {
 		log.Fatal("git config from event.json is nil")
 	}
 
-	// Direct port of v1 logic follows below:
+	// Setup Auth
+	var auth transport.AuthMethod
+	// TODO: auth token-based?  (see v1 askpass.sh)
+	// Do we default to this or just nil auth?
+	auth = &githttp.BasicAuth{
+		// TODO: what mech will/can we receive this token (BRIGADE_REPO_AUTH_TOKEN in v1)
+		// TODO: this appears to be used as an oauth token only -- or can it also be used as an ssh passphrase when paired with a key?
+		Password: os.Getenv("BRIGADE_REPO_AUTH_TOKEN"),
+	}
 
+	// Check for SSH Key
+	// TODO: what mech will/can we receive the ssh key (BRIGADE_REPO_KEY in v1)
+	privateKeyFile := "/id_dsa"
+	if _, err = os.Stat(privateKeyFile); err == nil {
+		publicKeys, err := gitssh.NewPublicKeysFromFile(gitssh.DefaultUsername, privateKeyFile, "")
+		if err != nil {
+			log.Fatalf("error creating public ssh keys: %s", err)
+		}
+		publicKeys.HostKeyCallback = ssh.InsecureIgnoreHostKey()
+		auth = publicKeys
+	}
+
+	// Check for SSH Cert
+	// see https://github.blog/2019-08-14-ssh-certificate-authentication-for-github-enterprise-cloud/ for more details
+	// TODO: what mech will/can we receive the ssh cert (BRIGADE_REPO_SSH_CERT in v1)
+	// I think all we need to do is to make sure the cert file exists in the below location (?)
+	// sshCertFile := "/id_dsa-cert.pub"
+
+	// Direct port of v1 logic follows below:
 	commitRef := gitConfig.Ref
 	if commitRef == "" {
 		commitRef = gitConfig.Commit
@@ -87,7 +118,7 @@ func main() {
 	rem := git.NewRemote(gitStorage, remoteConfig)
 
 	// From v1: git ls-remote --exit-code "${BRIGADE_REMOTE_URL}" "${BRIGADE_COMMIT_REF}" | cut -f2
-	refs, err := rem.List(&git.ListOptions{})
+	refs, err := rem.List(&git.ListOptions{Auth: auth})
 	if err != nil {
 		log.Fatalf("error listing remotes: %s", err)
 	}
@@ -133,6 +164,7 @@ func main() {
 		RemoteName: gitConfig.CloneURL,
 		RefSpecs:   []config.RefSpec{refSpec},
 		Force:      true,
+		Auth:       auth,
 	}
 	err = remote.Fetch(fetchOpts)
 	if err != nil {
@@ -170,4 +202,14 @@ func main() {
 			}
 		}
 	}
+
+	// Testing
+	cmd := exec.Command("ls", "-haltr", "/src")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err = cmd.Run()
+	if err != nil {
+		log.Fatalf("failed to run command %q: %s", cmd, err)
+	}
+	log.Print(out.String())
 }

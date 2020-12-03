@@ -14,7 +14,9 @@ RUN cd vcs-sidecar && go build \
   -ldflags "-w -X github.com/brigadecore/brigade/v2/vcs-sidecar/version.version=$VERSION -X github.com/brigadecore/brigade/v2/vcs-sidecar/version.commit=$COMMIT" \
   .
 
-FROM scratch
+# FROM scratch
+# TODO: go back to scratch; using alpine for testing (use of core utilities like 'ls', etc.)
+FROM alpine
 COPY --from=0 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=0 /src/bin/ /brigade/bin/
 ENTRYPOINT ["/brigade/bin/vcs-sidecar"]
