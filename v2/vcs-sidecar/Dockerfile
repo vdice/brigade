@@ -4,6 +4,7 @@ ARG COMMIT
 ENV CGO_ENABLED=0
 WORKDIR /src
 COPY sdk/ sdk/
+COPY v2/internal v2/internal
 WORKDIR /src/v2
 COPY v2/vcs-sidecar vcs-sidecar/
 COPY v2/go.mod go.mod

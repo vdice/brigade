@@ -1,22 +1,20 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
-	"os/exec"
 	"strings"
 
 	osfs "github.com/go-git/go-billy/v5/osfs"
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
-	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/go-git/go-git/v5/storage/filesystem"
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/ssh"
 
@@ -35,6 +33,8 @@ type worker struct {
 	Git *core.GitConfig `json:"git"`
 }
 
+// Building w/ CLI frontend such that various opts can be easily overridden
+// for testing, e.g. payload file location, workspace location, etc.
 func main() {
 	app := cli.NewApp()
 	app.Name = "Brigade VCS Sidecar"
@@ -67,7 +67,6 @@ func main() {
 		},
 	}
 	app.Action = vcsCheckout
-	fmt.Println()
 	if err := app.RunContext(signals.Context(), os.Args); err != nil {
 		fmt.Printf("\n%s\n\n", err)
 		os.Exit(1)
@@ -76,9 +75,6 @@ func main() {
 }
 
 // TODO: needs retry (see v1)
-
-// TODO: need env vars that v1 uses?
-// // BRIGADE_WORKSPACE
 
 func vcsCheckout(c *cli.Context) error {
 	payloadFile := c.String("payload")
@@ -132,56 +128,14 @@ func vcsCheckout(c *cli.Context) error {
 	// I think all we need to do is to make sure the cert file exists in the below location (?)
 	// sshCertFile := c.String("sshCert")
 
-	// Direct port of v1 logic follows below:
+	// Prioritize using Ref; alternatively try Commit
 	commitRef := gitConfig.Ref
 	if commitRef == "" {
 		commitRef = gitConfig.Commit
 	}
 
 	// Create refspec
-	refSpec := config.RefSpec(fmt.Sprintf("+%s:%s",
-		strings.TrimSpace(commitRef), strings.TrimSpace(commitRef)))
-
-	err = refSpec.Validate()
-	if err != nil {
-		return errors.Wrapf(err, "error validating refSpec %q from commitRef %q", refSpec, commitRef)
-	}
-
-	gitStorage := memory.NewStorage()
-	remoteConfig := &config.RemoteConfig{
-		Name:  "origin",
-		URLs:  []string{gitConfig.CloneURL},
-		Fetch: []config.RefSpec{refSpec},
-	}
-
-	// Create the remote with repository URL
-	rem := git.NewRemote(gitStorage, remoteConfig)
-
-	// From v1: git ls-remote --exit-code "${BRIGADE_REMOTE_URL}" "${BRIGADE_COMMIT_REF}" | cut -f2
-	refs, err := rem.List(&git.ListOptions{Auth: auth})
-	if err != nil {
-		return errors.Wrap(err, "error listing remotes")
-	}
-
-	// Filter the references list and only keep the full ref
-	// matching our commitRef
-	for _, ref := range refs {
-		// There appears to be a HEAD ref that may exist with formatting
-		// different from the rest; if we encounter, skip
-		// [HEAD ref: refs/heads/master]
-		if strings.Contains(ref.Strings()[0], "HEAD") {
-			continue
-		}
-
-		if strings.Contains(ref.Strings()[0], commitRef) ||
-			strings.Contains(ref.Strings()[1], commitRef) {
-			commitRef = ref.Strings()[1]
-		}
-	}
-
-	// Create refspec
-	refSpec = config.RefSpec(fmt.Sprintf("+%s:%s",
-		strings.TrimSpace(commitRef), strings.TrimSpace(commitRef)))
+	refSpec := config.RefSpec(fmt.Sprintf("+%s:%s", commitRef, commitRef))
 
 	err = refSpec.Validate()
 	if err != nil {
@@ -190,11 +144,61 @@ func vcsCheckout(c *cli.Context) error {
 
 	// TODO: v1 has env var for BRIGADE_WORKSPACE
 	workspace := c.String("workspace")
-	repo, err := git.Init(gitStorage, osfs.New(workspace))
+	fs := osfs.New(workspace)
+	gitStorage := filesystem.NewStorage(osfs.New(fs.Join(workspace, ".git")), cache.NewObjectLRUDefault())
+
+	// TODO: rm debug log
+	fmt.Printf("workspace = %s\n", workspace)
+
+	// Create a new remote for the purposes of listing remote refs and finding
+	// the full ref we want
+	remoteConfig := &config.RemoteConfig{
+		Name:  gitConfig.CloneURL,
+		URLs:  []string{gitConfig.CloneURL},
+		Fetch: []config.RefSpec{refSpec},
+	}
+	rem := git.NewRemote(gitStorage, remoteConfig)
+
+	refs, err := rem.List(&git.ListOptions{Auth: auth})
+	if err != nil {
+		return errors.Wrap(err, "error listing remotes")
+	}
+
+	// Filter the references list and only keep the full ref
+	// matching our commitRef
+	var fullRef string
+	for _, ref := range refs {
+		// Ignore the HEAD symbolic reference
+		// e.g. [HEAD ref: refs/heads/master]
+		if ref.Type() == plumbing.SymbolicReference {
+			continue
+		}
+
+		if strings.Contains(ref.Strings()[0], commitRef) ||
+			strings.Contains(ref.Strings()[1], commitRef) {
+			fullRef = ref.Strings()[0]
+		}
+	}
+	// Create refspec
+	refSpec = config.RefSpec(fmt.Sprintf("+%s:%s", fullRef, fullRef))
+	// TODO: rm debug log
+	fmt.Printf("refSpec = %+v\n", refSpec)
+	err = refSpec.Validate()
+	if err != nil {
+		return errors.Wrapf(err, "error validating refSpec %q", refSpec)
+	}
+
+	repo, err := git.Init(gitStorage, fs)
 	if err != nil {
 		return errors.Wrap(err, "error initing new git workspace")
 	}
 
+	// Create the remote that we'll use to fetch, using the updated/full refspec
+	remoteConfig = &config.RemoteConfig{
+		Name:  gitConfig.CloneURL,
+		URLs:  []string{gitConfig.CloneURL},
+		Fetch: []config.RefSpec{refSpec},
+	}
 	remote, err := repo.CreateRemote(remoteConfig)
 	if err != nil {
 		return errors.Wrap(err, "error creating remote")
@@ -208,7 +212,7 @@ func vcsCheckout(c *cli.Context) error {
 	}
 	err = remote.Fetch(fetchOpts)
 	if err != nil {
-		return errors.Wrap(err, "error fetching remotes")
+		return errors.Wrap(err, "error fetching refs from the remote")
 	}
 
 	worktree, err := repo.Worktree()
@@ -216,14 +220,43 @@ func vcsCheckout(c *cli.Context) error {
 		return errors.Wrap(err, "error creating repo worktree")
 	}
 
-	checkoutOpts := &git.CheckoutOptions{
-		Branch: plumbing.ReferenceName(commitRef),
-		Force:  true,
+	// Apparently w/ go-git, if we have a tag, we should check out via hash?
+	// https://github.com/src-d/go-git/issues/980#issuecomment-434249875
+	//
+	// If we just check out the branch (e.g. v0.1.0), the tag test in test/test.sh
+	// errors with:
+	// // Check failed: 'ddff78a' == '589e150' (expected is 'ddff78a')
+	//
+	// However, when we attempt to checkout via the hash (which is 'ddff78a')
+	// We see the following from go-git:
+	// // error checking out worktree: object not found
+
+	// See if we have a tag
+	tag, err := repo.Tag(commitRef)
+	if err != nil && err != git.ErrTagNotFound {
+		return errors.Wrap(err, "unable to get tag object from commit reference")
 	}
+
+	checkoutOpts := &git.CheckoutOptions{
+		Force: true,
+	}
+	if tag != nil {
+		checkoutOpts.Hash = tag.Hash()
+	} else {
+		checkoutOpts.Branch = plumbing.ReferenceName(fullRef)
+	}
+
+	// TODO: rm debug log
+	fmt.Printf("checkoutOpts = %+v\n", checkoutOpts)
+
 	err = worktree.Checkout(checkoutOpts)
 	if err != nil {
 		return errors.Wrap(err, "error checking out worktree")
 	}
+
+	// TODO: after we checkout, we only have a HEAD sym ref,
+	// no FETCH_HEAD and no ORIG_HEAD
+	// (areese's v1 tests used FETCH_HEAD)
 
 	// Init submodules if config'd to do so
 	if gitConfig.InitSubmodules {
@@ -242,16 +275,6 @@ func vcsCheckout(c *cli.Context) error {
 			}
 		}
 	}
-
-	// Testing
-	cmd := exec.Command("ls", "-haltr", "/src")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	err = cmd.Run()
-	if err != nil {
-		return errors.Wrapf(err, "failed to run command %q", cmd)
-	}
-	log.Print(out.String())
 
 	return nil
 }

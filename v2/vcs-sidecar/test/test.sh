@@ -37,10 +37,10 @@ setup_git_server() {
 }
 
 cleanup() {
-  # pkill -9 git-daemon >/dev/null 2>&1
+  pkill -9 git-daemon >/dev/null 2>&1
   rm -rf "${tempdir}"
 }
-trap 'cleanup' EXIT
+# trap 'cleanup' EXIT
 
 test_clone() {
   local revision="$1" want="$2"
@@ -57,7 +57,8 @@ test_clone() {
     -w "${BRIGADE_WORKSPACE}" # \
     # --sshKey ./testkey.pem
 
-  got="$(git -C ${BRIGADE_WORKSPACE} rev-parse --short FETCH_HEAD)"
+  # TODO: this used to check FETCH_HEAD; using go-git we don't see this symbolic ref
+  got="$(git -C ${BRIGADE_WORKSPACE} rev-parse --short HEAD)"
 
   check_equal "${want}" "${got}"
 
