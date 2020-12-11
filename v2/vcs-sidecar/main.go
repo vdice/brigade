@@ -59,10 +59,12 @@ func main() {
 		},
 		&cli.StringFlag{
 			Name:  "sshKey",
+			Value: "/id_dsa",
 			Usage: "Path to the ssh key to use for git auth (optional)",
 		},
 		&cli.StringFlag{
 			Name:  "sshCert",
+			Value: "/id_dsa-cert.pub",
 			Usage: "Path to the ssh cert to use for git auth (optional)",
 		},
 	}
@@ -109,17 +111,19 @@ func vcsCheckout(c *cli.Context) error {
 	// TODO: what mech will/can we receive the ssh key (BRIGADE_REPO_KEY in v1)
 	privateKeyFile := c.String("sshKey")
 	if privateKeyFile != "" {
-		_, err = os.Stat(privateKeyFile)
-		if err != nil {
-			return errors.Wrapf(err, "unable to locate ssh key file %q", privateKeyFile)
+		keyFile, err := os.Stat(privateKeyFile)
+		if err != nil && !os.IsNotExist(err) {
+			return errors.Wrapf(err, "unable to read ssh key file %q", privateKeyFile)
 		}
 
-		publicKeys, err := gitssh.NewPublicKeysFromFile(gitssh.DefaultUsername, privateKeyFile, "")
-		if err != nil {
-			return errors.Wrap(err, "error creating ssh auth for git")
+		if keyFile != nil {
+			publicKeys, err := gitssh.NewPublicKeysFromFile(gitssh.DefaultUsername, privateKeyFile, "")
+			if err != nil {
+				return errors.Wrap(err, "error creating ssh auth for git")
+			}
+			publicKeys.HostKeyCallback = ssh.InsecureIgnoreHostKey()
+			auth = publicKeys
 		}
-		publicKeys.HostKeyCallback = ssh.InsecureIgnoreHostKey()
-		auth = publicKeys
 	}
 
 	// Check for SSH Cert
