@@ -247,3 +247,17 @@ hack: hack-push-images hack-build-cli
 		--set logger.linux.image.repository=$(DOCKER_IMAGE_PREFIX)logger-linux \
 		--set logger.linux.image.tag=$(IMMUTABLE_DOCKER_TAG) \
 		--set logger.linux.image.pullPolicy=Always
+		# TODO: set vcs sidecar details
+
+# Targets to quickly build and test the vcs-sidecar component
+
+# TODO: Do we want a go-build-* suite of targets for all components?
+.PHONY: go-build-vcs-sidecar
+go-build-vcs-sidecar:
+	@cd v2/vcs-sidecar && \
+		go build -o ../../bin/vcs-sidecar .
+
+.PHONY: test-vcs-sidecar
+test-vcs-sidecar:
+	@cd v2/vcs-sidecar && \
+		./test/test.sh
