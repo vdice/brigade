@@ -92,7 +92,7 @@ func vcsCheckout(c *cli.Context) error {
 	// Extract git config
 	gitConfig := event.Worker.Git
 	if gitConfig == nil {
-		return fmt.Errorf("git config from %q is nil", payloadFile)
+		return fmt.Errorf("git config from %q is empty", payloadFile)
 	}
 
 	// Setup Auth
@@ -131,20 +131,18 @@ func vcsCheckout(c *cli.Context) error {
 	// below location (?)
 	// sshCertFile := c.String("sshCert")
 
-	// Prioritize using Ref; alternatively try Commit
+	// Prioritize using Ref; alternatively try Commit; else, set to master
 	commitRef := gitConfig.Ref
 	if commitRef == "" {
 		commitRef = gitConfig.Commit
 	}
-
-	// Create refspec used for listing remote refs
-	refSpec := config.RefSpec(fmt.Sprintf("+%s:%s", commitRef, commitRef))
-
-	err = refSpec.Validate()
-	if err != nil {
-		return errors.Wrapf(err, "error validating refSpec %q from commitRef %q",
-			refSpec, commitRef)
+	if commitRef == "" {
+		commitRef = "refs/heads/master"
 	}
+	fullRef := plumbing.NewReferenceFromStrings(commitRef, commitRef)
+
+	// Create initial refspec used for remote configs
+	refSpec := config.RefSpec(fmt.Sprintf("+%s:%s", fullRef.Name(), fullRef.Name()))
 
 	// Setup workspace using the osfs/filesystem impl, with the underlying
 	// git storage as the usual workspace/.git dir
@@ -158,43 +156,47 @@ func vcsCheckout(c *cli.Context) error {
 	dotgit := osfs.New(fs.Join(workspace, ".git"))
 	gitStorage := filesystem.NewStorage(dotgit, cache.NewObjectLRUDefault())
 
-	// Create a new remote for the purposes of listing remote refs and finding
-	// the full ref we want
-	remoteConfig := &config.RemoteConfig{
-		Name:  gitConfig.CloneURL,
-		URLs:  []string{gitConfig.CloneURL},
-		Fetch: []config.RefSpec{refSpec},
-	}
-	rem := git.NewRemote(gitStorage, remoteConfig)
+	// If we're not dealing with an exact commit, list the remote refs
+	// to build out a full, updated refspec
+	if gitConfig.Commit == "" {
+		// Create a new remote for the purposes of listing remote refs and finding
+		// the full ref we want
+		remoteConfig := &config.RemoteConfig{
+			Name:  gitConfig.CloneURL,
+			URLs:  []string{gitConfig.CloneURL},
+			Fetch: []config.RefSpec{refSpec},
+		}
+		rem := git.NewRemote(gitStorage, remoteConfig)
 
-	// List remote refs
-	refs, err := rem.List(&git.ListOptions{Auth: auth})
-	if err != nil {
-		return errors.Wrap(err, "error listing remotes")
-	}
-
-	// Filter the list of refs and only keep the full ref matching our commitRef
-	var fullRef *plumbing.Reference
-	for _, ref := range refs {
-		// Ignore the HEAD symbolic reference
-		// e.g. [HEAD ref: refs/heads/master]
-		if ref.Type() == plumbing.SymbolicReference {
-			continue
+		// List remote refs
+		refs, err := rem.List(&git.ListOptions{Auth: auth})
+		if err != nil {
+			return errors.Wrap(err, "error listing remotes")
 		}
 
-		if strings.Contains(ref.Name().String(), commitRef) ||
-			strings.Contains(ref.Hash().String(), commitRef) {
-			fullRef = ref
+		// Filter the list of refs and only keep the full ref matching our commitRef
+		var found bool
+		for _, ref := range refs {
+			// Ignore the HEAD symbolic reference
+			// e.g. [HEAD ref: refs/heads/master]
+			if ref.Type() == plumbing.SymbolicReference {
+				continue
+			}
+
+			if strings.Contains(ref.Name().String(), fullRef.Name().String()) ||
+				strings.Contains(ref.Hash().String(), fullRef.Hash().String()) {
+				fullRef = ref
+				found = true
+			}
 		}
-	}
 
-	// Create refspec with the full ref
-	refSpec = config.RefSpec(fmt.Sprintf("+%s:%s",
-		fullRef.Name(), fullRef.Name()))
+		if !found {
+			return fmt.Errorf("reference %q not found in repo %q", fullRef.Name(), gitConfig.CloneURL)
+		}
 
-	err = refSpec.Validate()
-	if err != nil {
-		return errors.Wrapf(err, "error validating refSpec %q", refSpec)
+		// Create refspec with the updated ref
+		refSpec = config.RefSpec(fmt.Sprintf("+%s:%s",
+			fullRef.Name(), fullRef.Name()))
 	}
 
 	// Init empty git repo
@@ -204,7 +206,7 @@ func vcsCheckout(c *cli.Context) error {
 	}
 
 	// Create the remote that we'll use to fetch, using the updated/full refspec
-	remoteConfig = &config.RemoteConfig{
+	remoteConfig := &config.RemoteConfig{
 		Name:  gitConfig.CloneURL,
 		URLs:  []string{gitConfig.CloneURL},
 		Fetch: []config.RefSpec{refSpec},

@@ -15,6 +15,9 @@ check_equal() {
   }
 }
 
+# TODO: remove or update; we've opted to supply GitHub URLs directly in the test_clone method for now...
+# # areese mentioned updating this to init and create objects in a new local repo (create/push branches, tags, etc.)
+# # Then, we won't have to clone an external repo
 setup_git_server() {
   local srvroot="${root_dir}/tmp"
 
@@ -39,16 +42,23 @@ cleanup() {
   pkill -9 git-daemon >/dev/null 2>&1
   rm -rf "${tempdir}"
 }
-trap 'cleanup' EXIT
+# trap 'cleanup' EXIT
 
 test_clone() {
   local revision="$1" want="$2"
   local eventjson="${root_dir}/tmp/event.json"
 
+  local key="ref"
+  if [[ ${#revision} == 40 ]]; then
+    key="commit"
+  elif [[ ${#revision} == 0 ]]; then
+    key="foo"
+  fi
+
   jq -n \
     --arg ref "${revision}" \
-    --arg cloneURL "git://127.0.0.1/test.git" \
-    '{worker: {git: {ref: $ref, cloneURL: $cloneURL}}}' > "${eventjson}"
+    --arg cloneURL "https://github.com/brigadecore/empty-testbed.git" \
+    '{worker: {git: {'"${key}"': $ref, cloneURL: $cloneURL}}}' > "${eventjson}"
 
   cat "${eventjson}" | jq
 
@@ -64,7 +74,17 @@ test_clone() {
   rm -rf "${BRIGADE_WORKSPACE}"
 }
 
-setup_git_server
+# setup_git_server
+
+# TODO: add fail cases (at least no ref found)
+
+# TODO: update tests for more configurability, e.g.
+# # using private repo url (ssh key)
+# # using repo with git submodules to init
+
+echo ":: Checkout sha"
+test_clone "99f3efa2b70c370d4ee0833c213c085a6ec146ab" "99f3efa"
+echo
 
 echo ":: Checkout tag"
 test_clone "v0.1.0" "ddff78a"
@@ -76,6 +96,10 @@ echo
 
 echo ":: Checkout pull request by reference"
 test_clone "refs/pull/1/head" "5c4bc10"
+echo
+
+echo ":: Checkout w/o supplying ref or commit" # should return master commit
+test_clone "" "1ecc6f4"
 echo
 
 echo "All tests passing"
