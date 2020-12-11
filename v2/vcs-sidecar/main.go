@@ -123,9 +123,12 @@ func vcsCheckout(c *cli.Context) error {
 	}
 
 	// Check for SSH Cert
-	// see https://github.blog/2019-08-14-ssh-certificate-authentication-for-github-enterprise-cloud/ for more details
-	// TODO: what mech will/can we receive the ssh cert (BRIGADE_REPO_SSH_CERT in v1)
-	// I think all we need to do is to make sure the cert file exists in the below location (?)
+	// https://github.blog/2019-08-14-ssh-certificate-authentication-for-github-enterprise-cloud/
+	//
+	// TODO: what mech will/can we receive the ssh cert
+	// (BRIGADE_REPO_SSH_CERT in v1)
+	// I think all we need to do is to make sure the cert file exists in the
+	// below location (?)
 	// sshCertFile := c.String("sshCert")
 
 	// Prioritize using Ref; alternatively try Commit
@@ -134,21 +137,26 @@ func vcsCheckout(c *cli.Context) error {
 		commitRef = gitConfig.Commit
 	}
 
-	// Create refspec
+	// Create refspec used for listing remote refs
 	refSpec := config.RefSpec(fmt.Sprintf("+%s:%s", commitRef, commitRef))
 
 	err = refSpec.Validate()
 	if err != nil {
-		return errors.Wrapf(err, "error validating refSpec %q from commitRef %q", refSpec, commitRef)
+		return errors.Wrapf(err, "error validating refSpec %q from commitRef %q",
+			refSpec, commitRef)
 	}
 
+	// Setup workspace using the osfs/filesystem impl, with the underlying
+	// git storage as the usual workspace/.git dir
+	//
+	// fs = our repo's workspace/worktree
+	// dotgit = the .git dir included therein
+	//
 	// TODO: v1 has env var for BRIGADE_WORKSPACE
 	workspace := c.String("workspace")
 	fs := osfs.New(workspace)
-	gitStorage := filesystem.NewStorage(osfs.New(fs.Join(workspace, ".git")), cache.NewObjectLRUDefault())
-
-	// TODO: rm debug log
-	fmt.Printf("workspace = %s\n", workspace)
+	dotgit := osfs.New(fs.Join(workspace, ".git"))
+	gitStorage := filesystem.NewStorage(dotgit, cache.NewObjectLRUDefault())
 
 	// Create a new remote for the purposes of listing remote refs and finding
 	// the full ref we want
@@ -159,14 +167,14 @@ func vcsCheckout(c *cli.Context) error {
 	}
 	rem := git.NewRemote(gitStorage, remoteConfig)
 
+	// List remote refs
 	refs, err := rem.List(&git.ListOptions{Auth: auth})
 	if err != nil {
 		return errors.Wrap(err, "error listing remotes")
 	}
 
-	// Filter the references list and only keep the full ref
-	// matching our commitRef
-	var fullRef string
+	// Filter the list of refs and only keep the full ref matching our commitRef
+	var fullRef *plumbing.Reference
 	for _, ref := range refs {
 		// Ignore the HEAD symbolic reference
 		// e.g. [HEAD ref: refs/heads/master]
@@ -174,20 +182,22 @@ func vcsCheckout(c *cli.Context) error {
 			continue
 		}
 
-		if strings.Contains(ref.Strings()[0], commitRef) ||
-			strings.Contains(ref.Strings()[1], commitRef) {
-			fullRef = ref.Strings()[0]
+		if strings.Contains(ref.Name().String(), commitRef) ||
+			strings.Contains(ref.Hash().String(), commitRef) {
+			fullRef = ref
 		}
 	}
-	// Create refspec
-	refSpec = config.RefSpec(fmt.Sprintf("+%s:%s", fullRef, fullRef))
-	// TODO: rm debug log
-	fmt.Printf("refSpec = %+v\n", refSpec)
+
+	// Create refspec with the full ref
+	refSpec = config.RefSpec(fmt.Sprintf("+%s:%s",
+		fullRef.Name(), fullRef.Name()))
+
 	err = refSpec.Validate()
 	if err != nil {
 		return errors.Wrapf(err, "error validating refSpec %q", refSpec)
 	}
 
+	// Init empty git repo
 	repo, err := git.Init(gitStorage, fs)
 	if err != nil {
 		return errors.Wrap(err, "error initing new git workspace")
@@ -204,6 +214,7 @@ func vcsCheckout(c *cli.Context) error {
 		return errors.Wrap(err, "error creating remote")
 	}
 
+	// Fetch the ref specs we are interested in
 	fetchOpts := &git.FetchOptions{
 		RemoteName: gitConfig.CloneURL,
 		RefSpecs:   []config.RefSpec{refSpec},
@@ -215,48 +226,35 @@ func vcsCheckout(c *cli.Context) error {
 		return errors.Wrap(err, "error fetching refs from the remote")
 	}
 
+	// Create a FETCH_HEAD reference pointing to our ref hash
+	// The go-git library doesn't appear to support adding this, though the
+	// git CLI does.  This is for parity with v1 functionality.
+	//
+	// From https://git-scm.com/docs/gitrevisions:
+	// "FETCH_HEAD records the branch which you fetched from a remote repository
+	// with your last git fetch invocation.""
+	newRef := plumbing.NewReferenceFromStrings("FETCH_HEAD",
+		fullRef.Hash().String())
+	err = repo.Storer.SetReference(newRef)
+	if err != nil {
+		return errors.Wrap(err, "unable to set ref")
+	}
+
+	// Create worktree/repo contents
 	worktree, err := repo.Worktree()
 	if err != nil {
 		return errors.Wrap(err, "error creating repo worktree")
 	}
 
-	// Apparently w/ go-git, if we have a tag, we should check out via hash?
-	// https://github.com/src-d/go-git/issues/980#issuecomment-434249875
-	//
-	// If we just check out the branch (e.g. v0.1.0), the tag test in test/test.sh
-	// errors with:
-	// // Check failed: 'ddff78a' == '589e150' (expected is 'ddff78a')
-	//
-	// However, when we attempt to checkout via the hash (which is 'ddff78a')
-	// We see the following from go-git:
-	// // error checking out worktree: object not found
-
-	// See if we have a tag
-	tag, err := repo.Tag(commitRef)
-	if err != nil && err != git.ErrTagNotFound {
-		return errors.Wrap(err, "unable to get tag object from commit reference")
-	}
-
+	// Check out worktree/repo contents
 	checkoutOpts := &git.CheckoutOptions{
-		Force: true,
+		Branch: fullRef.Name(),
+		Force:  true,
 	}
-	if tag != nil {
-		checkoutOpts.Hash = tag.Hash()
-	} else {
-		checkoutOpts.Branch = plumbing.ReferenceName(fullRef)
-	}
-
-	// TODO: rm debug log
-	fmt.Printf("checkoutOpts = %+v\n", checkoutOpts)
-
 	err = worktree.Checkout(checkoutOpts)
 	if err != nil {
 		return errors.Wrap(err, "error checking out worktree")
 	}
-
-	// TODO: after we checkout, we only have a HEAD sym ref,
-	// no FETCH_HEAD and no ORIG_HEAD
-	// (areese's v1 tests used FETCH_HEAD)
 
 	// Init submodules if config'd to do so
 	if gitConfig.InitSubmodules {
@@ -271,7 +269,8 @@ func vcsCheckout(c *cli.Context) error {
 		for _, submodule := range submodules {
 			err := submodule.Update(opts)
 			if err != nil {
-				return errors.Wrapf(err, "error updating submodule %q: %s", submodule.Config().Name)
+				return errors.Wrapf(err, "error updating submodule %q: %s",
+					submodule.Config().Name)
 			}
 		}
 	}

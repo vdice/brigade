@@ -31,7 +31,6 @@ setup_git_server() {
 
   repo_root="${root_dir}/tmp/test.git"
 
-  # TODO: update such that this url can be overridden by tests
   git clone --mirror https://github.com/brigadecore/empty-testbed.git "${repo_root}"
   )
 }
@@ -40,25 +39,25 @@ cleanup() {
   pkill -9 git-daemon >/dev/null 2>&1
   rm -rf "${tempdir}"
 }
-# trap 'cleanup' EXIT
+trap 'cleanup' EXIT
 
 test_clone() {
   local revision="$1" want="$2"
+  local eventjson="${root_dir}/tmp/event.json"
 
   jq -n \
     --arg ref "${revision}" \
     --arg cloneURL "git://127.0.0.1/test.git" \
-    '{worker: {git: {ref: $ref, cloneURL: $cloneURL}}}' > ./event.json
+    '{worker: {git: {ref: $ref, cloneURL: $cloneURL}}}' > "${eventjson}"
 
-  cat ./event.json | jq
+  cat "${eventjson}" | jq
 
   ../../bin/vcs-sidecar \
-    -p ./event.json \
+    -p "${eventjson}" \
     -w "${BRIGADE_WORKSPACE}" # \
     # --sshKey ./testkey.pem
 
-  # TODO: this used to check FETCH_HEAD; using go-git we don't see this symbolic ref
-  got="$(git -C ${BRIGADE_WORKSPACE} rev-parse --short HEAD)"
+  got="$(git -C ${BRIGADE_WORKSPACE} rev-parse --short FETCH_HEAD)"
 
   check_equal "${want}" "${got}"
 
