@@ -47,6 +47,8 @@ ifneq ($(SKIP_DOCKER),true)
 		-e SKIP_DOCKER=true \
 		-e DOCKER_USERNAME=$${DOCKER_USERNAME} \
 		-e DOCKER_PASSWORD=$${DOCKER_PASSWORD} \
+		-e VERSION="$(VERSION)" \
+		-e COMMIT="$(GIT_VERSION)" \
 		-v $(PROJECT_ROOT):/workspaces/brigade \
 		-w /workspaces/brigade \
 		$(KANIKO_IMAGE)
@@ -149,6 +151,8 @@ build-logger-linux:
 .PHONY: build-%
 build-%:
 	$(KANIKO_DOCKER_CMD) /kaniko/executor \
+		--build-arg VERSION="$(VERSION)" \
+		--build-arg COMMIT="$(GIT_VERSION)" \
 		--dockerfile /workspaces/brigade/v2/$*/Dockerfile \
 		--context dir:///workspaces/brigade/ \
 		--no-push
@@ -172,6 +176,8 @@ push-%:
 	$(KANIKO_DOCKER_CMD) sh -c ' \
 		docker login $(DOCKER_REGISTRY) -u $${DOCKER_USERNAME} -p $${DOCKER_PASSWORD} && \
 		/kaniko/executor \
+			--build-arg VERSION="$(VERSION)" \
+			--build-arg COMMIT="$(GIT_VERSION)" \
 			--dockerfile /workspaces/brigade/v2/$*/Dockerfile \
 			--context dir:///workspaces/brigade/ \
 			--destination $(DOCKER_IMAGE_PREFIX)$*:$(IMMUTABLE_DOCKER_TAG) \
@@ -255,7 +261,12 @@ hack: hack-push-images hack-build-cli
 .PHONY: go-build-vcs-sidecar
 go-build-vcs-sidecar:
 	@cd v2/vcs-sidecar && \
-		go build -o ../../bin/vcs-sidecar .
+		go build \
+			-o ../../bin/vcs-sidecar \
+			-ldflags "-w \
+				-X github.com/brigadecore/brigade/v2/vcs-sidecar/version.version=${VERSION} \
+				-X github.com/brigadecore/brigade/v2/vcs-sidecar/version.commit=${GIT_VERSION}" \
+			.
 
 .PHONY: test-vcs-sidecar
 test-vcs-sidecar:
