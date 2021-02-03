@@ -177,6 +177,14 @@ func (e *eventsStore) GetByHashedWorkerToken(
 func (e *eventsStore) Cancel(ctx context.Context, id string) error {
 	now := time.Now().UTC()
 
+	// set := 
+	// for job := range event.Worker.Jobs {
+	// 	set[fmt.Sprintf("worker.jobs.%s.status", job)] = core.JobStatus{
+	// 		Ended: &now,
+	// 		Phase: core.JobPhaseCanceled,
+	// 	}
+	// }
+
 	res, err := e.collection.UpdateOne(
 		ctx,
 		bson.M{
@@ -187,6 +195,10 @@ func (e *eventsStore) Cancel(ctx context.Context, id string) error {
 			"$set": bson.M{
 				"canceled":            now,
 				"worker.status.phase": core.WorkerPhaseCanceled,
+				"worker.jobs.$[].status": core.JobStatus{
+					Ended: &now,
+					Phase: core.JobPhaseCanceled,
+				},
 			},
 		},
 	)
@@ -196,6 +208,14 @@ func (e *eventsStore) Cancel(ctx context.Context, id string) error {
 	if res.MatchedCount == 1 {
 		return nil
 	}
+
+	// set = 
+	// for job := range event.Worker.Jobs {
+	// 	set[fmt.Sprintf("worker.jobs.%s.status", job)] = core.JobStatus{
+	// 		Ended: &now,
+	// 		Phase: core.JobPhaseAborted,
+	// 	}
+	// }
 
 	res, err = e.collection.UpdateOne(
 		ctx,
@@ -212,15 +232,16 @@ func (e *eventsStore) Cancel(ctx context.Context, id string) error {
 			"$set": bson.M{
 				"canceled":            now,
 				"worker.status.phase": core.WorkerPhaseAborted,
+				"worker.jobs.$[].status": core.JobStatus{
+					Ended: &now,
+					Phase: core.JobPhaseAborted,
+				},
 			},
 		},
 	)
 	if err != nil {
 		return errors.Wrapf(err, "error updating status of event %q worker", id)
 	}
-
-	// TODO: If the event was running when it was canceled, its jobs need to be
-	// canceled also.
 
 	if res.MatchedCount == 0 {
 		return &meta.ErrConflict{
@@ -282,6 +303,10 @@ func (e *eventsStore) CancelMany(
 				"$set": bson.M{
 					"canceled":            cancellationTime,
 					"worker.status.phase": core.WorkerPhaseCanceled,
+					"worker.jobs.$[].status": core.JobStatus{
+						Ended: &cancellationTime,
+						Phase: core.JobPhaseCanceled,
+					},
 				},
 			},
 		); err != nil {
@@ -298,6 +323,10 @@ func (e *eventsStore) CancelMany(
 				"$set": bson.M{
 					"canceled":            cancellationTime,
 					"worker.status.phase": core.WorkerPhaseAborted,
+					"worker.jobs.$.status": core.JobStatus{
+						Ended: &cancellationTime,
+						Phase: core.JobPhaseAborted,
+					},
 				},
 			},
 		); err != nil {
@@ -314,15 +343,16 @@ func (e *eventsStore) CancelMany(
 				"$set": bson.M{
 					"canceled":            cancellationTime,
 					"worker.status.phase": core.WorkerPhaseAborted,
+					"worker.jobs.$[].status": core.JobStatus{
+						Ended: &cancellationTime,
+						Phase: core.JobPhaseAborted,
+					},
 				},
 			},
 		); err != nil {
 			return events, errors.Wrap(err, "error updating events")
 		}
 	}
-
-	// TODO: If any event was running when it was canceled, its jobs need to be
-	// canceled also.
 
 	delete(criteria, "worker.status.phase")
 	criteria["canceled"] = cancellationTime

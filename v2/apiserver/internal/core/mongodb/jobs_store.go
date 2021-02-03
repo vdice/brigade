@@ -32,7 +32,7 @@ func (j *jobsStore) Cancel(ctx context.Context, id, job string) error {
 		return errors.Wrapf(err, "unable to get status of job %q", job)
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	updatedStatus := core.JobStatus{
 		Ended: &now,
 	}
@@ -73,7 +73,7 @@ func (j *jobsStore) Create(
 		ctx,
 		bson.M{"id": eventID},
 		bson.M{
-			"$set": bson.M{
+			"$addToSet": bson.M{
 				fmt.Sprintf("worker.jobs.%s", jobName): job,
 			},
 		},
