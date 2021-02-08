@@ -37,8 +37,6 @@ func (j *jobsStore) Cancel(ctx context.Context, id, job string) error {
 		Ended: &now,
 	}
 
-	// TODO: need to check if job phase already terminal?
-	// Or does existing logic in events store prevent this?
 	switch status.Phase {
 	case core.JobPhasePending:
 		updatedStatus.Phase = core.JobPhaseCanceled
