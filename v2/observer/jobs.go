@@ -58,6 +58,10 @@ func (o *observer) syncJobPod(obj interface{}) {
 	}
 	switch pod.Status.Phase {
 	case corev1.PodPending:
+		if isTimedOut(pod) {
+			status.Phase = core.JobPhaseTimedOut
+			break
+		}
 		// For Brigade's purposes, this counts as running
 		status.Phase = core.JobPhaseRunning
 		// Unless... when an image pull backoff occurs, the pod still shows as
@@ -73,6 +77,10 @@ func (o *observer) syncJobPod(obj interface{}) {
 			}
 		}
 	case corev1.PodRunning:
+		if isTimedOut(pod) {
+			status.Phase = core.JobPhaseTimedOut
+			break
+		}
 		status.Phase = core.JobPhaseRunning
 	case corev1.PodSucceeded:
 		status.Phase = core.JobPhaseSucceeded
@@ -136,7 +144,8 @@ func (o *observer) syncJobPod(obj interface{}) {
 	}
 
 	if status.Phase == core.JobPhaseSucceeded ||
-		status.Phase == core.JobPhaseFailed {
+		status.Phase == core.JobPhaseFailed ||
+		status.Phase == core.JobPhaseTimedOut {
 		go o.deleteJobResourcesFn(pod.Namespace, pod.Name, eventID, jobName)
 	}
 }
@@ -175,4 +184,25 @@ func (o *observer) deleteJobResources(
 			),
 		)
 	}
+}
+
+func isTimedOut(pod *corev1.Pod) bool {
+	var started time.Time
+	if pod.Status.StartTime != nil {
+		started = pod.Status.StartTime.Time
+	}
+
+	if pod.Annotations != nil {
+		timeoutSeconds := pod.Annotations["timeoutSeconds"]
+		if timeoutSeconds != "" {
+			timeout, err := time.ParseDuration(timeoutSeconds + "s")
+			if err != nil {
+				// TODO: do we want to bubble this error up?
+				return false
+			}
+			return float64(started.Second())+timeout.Seconds() <
+				float64(time.Now().Second())
+		}
+	}
+	return false
 }

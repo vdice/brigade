@@ -214,6 +214,31 @@ func TestSyncJobPod(t *testing.T) {
 			},
 		},
 		{
+			name: "pod phase is running but has exceeded its timeout limit",
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"timeoutSeconds": "-1",
+					},
+				},
+			},
+			observer: &observer{
+				updateJobStatusFn: func(
+					ctx context.Context,
+					eventID string,
+					jobName string,
+					status core.JobStatus,
+				) error {
+					require.Equal(t, core.JobPhaseTimedOut, status.Phase)
+					return nil
+				},
+				deleteJobResourcesFn: func(_, _, _, _ string) {},
+			},
+		},
+		{
 			name: "error updating job status",
 			pod: &corev1.Pod{
 				Status: corev1.PodStatus{
