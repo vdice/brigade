@@ -185,6 +185,9 @@ type WorkerSpec struct {
 	// source control system and would like to embed configuration (e.g.
 	// brigade.json) or scripts (e.g. brigade.js) directly within the WorkerSpec.
 	DefaultConfigFiles map[string]string `json:"defaultConfigFiles,omitempty"`
+	// TimeoutSeconds specifies the time, in seconds, that must elapse before a
+	// Worker should be considered to have timed out.
+	TimeoutSeconds int64 `json:"timeoutSeconds,omitempty"`
 }
 
 // GitConfig represents git-specific Worker details.
