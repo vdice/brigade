@@ -10,6 +10,7 @@ import (
 	"github.com/brigadecore/brigade/sdk/v2/core"
 	"github.com/brigadecore/brigade/sdk/v2/system"
 	"github.com/brigadecore/brigade/v2/internal/os"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -31,11 +32,13 @@ type observer struct {
 	kubeClient      kubernetes.Interface
 	config          observerConfig
 	deletingPodsSet map[string]struct{}
+	timedPodsSet    map[string]context.CancelFunc
 	syncMu          *sync.Mutex
 	// All of the scheduler's goroutines will send fatal errors here
 	errCh chan error
 	// All of these internal functions are overridable for testing purposes
 	runHealthcheckLoopFn    func(ctx context.Context)
+	startJobPodTimerFn      func(ctx context.Context, pod *corev1.Pod)
 	syncWorkerPodsFn        func(ctx context.Context)
 	syncWorkerPodFn         func(obj interface{})
 	deleteWorkerResourcesFn func(namespace, podName, eventID string)
@@ -73,10 +76,12 @@ func newObserver(
 		kubeClient:      kubeClient,
 		config:          config,
 		deletingPodsSet: map[string]struct{}{},
+		timedPodsSet:    map[string]context.CancelFunc{},
 		syncMu:          &sync.Mutex{},
 		errCh:           make(chan error),
 	}
 	o.runHealthcheckLoopFn = o.runHealthcheckLoop
+	o.startJobPodTimerFn = o.startJobPodTimer
 	o.syncWorkerPodsFn = o.syncWorkerPods
 	o.syncWorkerPodFn = o.syncWorkerPod
 	o.deleteWorkerResourcesFn = o.deleteWorkerResources

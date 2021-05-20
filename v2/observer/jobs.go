@@ -7,6 +7,7 @@ import (
 
 	"github.com/brigadecore/brigade/sdk/v2/core"
 	myk8s "github.com/brigadecore/brigade/v2/internal/kubernetes"
+	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -46,6 +47,16 @@ func (o *observer) syncJobPods(ctx context.Context) {
 func (o *observer) syncJobPod(obj interface{}) {
 	pod := obj.(*corev1.Pod)
 
+	// Fetch the cancel func associated with a timed job pod
+	lookup := pod.Namespace + "/" + pod.Name
+	cancelTimer, exists := o.timedPodsSet[lookup]
+	if !exists {
+		var timerCtx context.Context
+		timerCtx, cancelTimer = context.WithCancel(context.Background())
+		o.timedPodsSet[lookup] = cancelTimer
+		o.startJobPodTimerFn(timerCtx, pod)
+	}
+
 	// Job pods are only deleted after we're FULLY done with them. So if the
 	// DeletionTimestamp is set, there's nothing for us to do because the Job must
 	// already be in a terminal state.
@@ -58,10 +69,6 @@ func (o *observer) syncJobPod(obj interface{}) {
 	}
 	switch pod.Status.Phase {
 	case corev1.PodPending:
-		if isTimedOut(pod) {
-			status.Phase = core.JobPhaseTimedOut
-			break
-		}
 		// For Brigade's purposes, this counts as running
 		status.Phase = core.JobPhaseRunning
 		// Unless... when an image pull backoff occurs, the pod still shows as
@@ -77,17 +84,16 @@ func (o *observer) syncJobPod(obj interface{}) {
 			}
 		}
 	case corev1.PodRunning:
-		if isTimedOut(pod) {
-			status.Phase = core.JobPhaseTimedOut
-			break
-		}
 		status.Phase = core.JobPhaseRunning
 	case corev1.PodSucceeded:
 		status.Phase = core.JobPhaseSucceeded
+		cancelTimer()
 	case corev1.PodFailed:
 		status.Phase = core.JobPhaseFailed
+		cancelTimer()
 	case corev1.PodUnknown:
 		status.Phase = core.JobPhaseUnknown
+		cancelTimer()
 	}
 
 	if pod.Status.StartTime != nil {
@@ -186,23 +192,66 @@ func (o *observer) deleteJobResources(
 	}
 }
 
-func isTimedOut(pod *corev1.Pod) bool {
-	var started time.Time
-	if pod.Status.StartTime != nil {
-		started = pod.Status.StartTime.Time
+func (o *observer) startJobPodTimer(ctx context.Context, pod *corev1.Pod) {
+	if pod.Status.Phase != corev1.PodPending &&
+		pod.Status.Phase != corev1.PodRunning {
+		return
+	}
+	if pod.Annotations["timeoutSeconds"] == "" {
+		return
 	}
 
-	if pod.Annotations != nil {
-		timeoutSeconds := pod.Annotations["timeoutSeconds"]
-		if timeoutSeconds != "" {
-			timeout, err := time.ParseDuration(timeoutSeconds + "s")
-			if err != nil {
-				// TODO: do we want to bubble this error up?
-				return false
-			}
-			return float64(started.Second())+timeout.Seconds() <
-				float64(time.Now().Second())
-		}
+	duration := pod.Annotations["timeoutSeconds"] + "s"
+	timeout, err := time.ParseDuration(duration)
+	if err != nil {
+		o.errFn(
+			errors.Wrapf(
+				err,
+				"unable to parse timeout duration %q for pod %q",
+				duration,
+				pod.Name,
+			),
+		)
+		return
 	}
-	return false
+
+	go func() {
+		ticker := time.NewTicker(timeout)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				status := core.JobStatus{
+					Phase: core.JobPhaseTimedOut,
+				}
+				// Use the API to update Job status
+				eventID := pod.Labels[myk8s.LabelEvent]
+				jobName := pod.Labels[myk8s.LabelJob]
+				apiRequestCtx, cancel := context.WithTimeout(
+					context.Background(),
+					apiRequestTimeout,
+				)
+				defer cancel()
+				if err := o.updateJobStatusFn(
+					apiRequestCtx,
+					eventID,
+					jobName,
+					status,
+				); err != nil {
+					o.errFn(
+						errors.Wrapf(
+							err,
+							"error updating status for event %q worker job %q",
+							eventID,
+							jobName,
+						),
+					)
+				}
+				go o.deleteJobResourcesFn(pod.Namespace, pod.Name, eventID, jobName)
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }
